@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+  }
+</script>
 <title id="pageTitle">مركز بن راجح الطاهري للمواد الغذائية والاستهلاكية</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
