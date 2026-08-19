@@ -323,137 +323,248 @@ if(!data.settings) {
 if(!data.groceries) data.groceries = [];
 
 function save() { localStorage.setItem("binrajih_app", JSON.stringify(data)); render(); }
-function toast(msg) { let t = document.getElementById("toast"); t.textContent = msg; t.style.display = "block"; setTimeout(() => t.style.display = "none", 2500); }
-function showSection(id) { document.querySelectorAll(".section").forEach(x => x.classList.remove("active")); document.getElementById(id).classList.add("active"); window.scrollTo(0, 0); }
+function toast(msg) { let t = document.getElementById("toast"); t.innerText = msg; t.style.display = "block"; setTimeout(() => t.style.display = "none", 3000); }
 
-// دالة ذكية لتنسيق رقم الواتساب وضمان فتحه المباشر
-function openWhatsApp(phone, message) {
-    if (!phone) return;
-    let cleanPhone = phone.replace(/\D/g, ''); // إزالة أي رموز أو مسافات
-    // إذا كان الرقم يبدأ بـ 7 مباشرة (محلي اليمن)، أضف رمز الدولة 967 تلقائياً
-    if (cleanPhone.startsWith('7') && cleanPhone.length === 9) {
-        cleanPhone = '967' + cleanPhone;
-    } else if (cleanPhone.startsWith('0') && cleanPhone.length === 10) {
-        cleanPhone = '967' + cleanPhone.substring(1);
+function showSection(secId, btn) {
+    document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+    document.getElementById(secId).classList.add("active");
+    if(btn) {
+        document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
     }
-    let url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
+    window.scrollTo(0,0);
+    render();
 }
 
-function getCustomerInfo(name) {
-    if(!name) return { acc: "", phone: "" };
-    let cleanName = name.trim().toLowerCase();
-    let foundAcc = "";
-    let foundPhone = "";
-
-    for(let t of data.transactions) {
-        if(t.name && t.name.trim().toLowerCase() === cleanName) {
-            if(t.acc) foundAcc = t.acc;
-            if(t.phone) foundPhone = t.phone;
-        }
+function getCustomersList() {
+    let map = {};
+    if(data.transactions) {
+        data.transactions.forEach(t => {
+            if(t.name) {
+                if(!map[t.name]) map[t.name] = { name: t.name, acc: t.acc || ("ACC-" + Math.abs(hashCode(t.name)) % 90000 + 10000), phone: t.phone || "" };
+                else if(t.phone && !map[t.name].phone) map[t.name].phone = t.phone;
+            }
+        });
     }
-    
-    for(let g of data.groceries) {
-        if(g.name && g.name.trim().toLowerCase() === cleanName) {
-            if(g.acc) foundAcc = g.acc;
-            if(g.phone) foundPhone = g.phone;
-        }
+    if(data.groceries) {
+        data.groceries.forEach(g => {
+            if(g.name) {
+                if(!map[g.name]) map[g.name] = { name: g.name, acc: g.acc || ("ACC-" + Math.abs(hashCode(g.name)) % 90000 + 10000), phone: g.phone || "" };
+                else if(g.phone && !map[g.name].phone) map[g.name].phone = g.phone;
+            }
+        });
     }
+    return Object.values(map);
+}
 
-    if(!foundAcc) {
-        let numbers = data.transactions.map(t => parseInt(t.acc)).concat(data.groceries.map(g => parseInt(g.acc))).filter(n => !isNaN(n));
-        let maxAcc = numbers.length > 0 ? Math.max(...numbers) : 1000;
-        foundAcc = String(Math.max(maxAcc + 1, 1001));
+function hashCode(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = (hash << 5) - hash + str.charCodeAt(i);
+        hash |= 0;
     }
+    return hash;
+}
 
-    return { acc: foundAcc, phone: foundPhone };
+function getCustomerBalance(name) {
+    let netYer = 0, netSau = 0, groceryDebt = 0;
+    if(data.transactions) {
+        data.transactions.forEach(t => {
+            if(t.name === name) {
+                let y = Number(t.yer || 0);
+                let s = Number(t.sau || 0);
+                if(t.type === "إيداع" || t.type === "شراء سعودي من العميل" || t.type === "بيع سعودي للعميل (نقداً)") {
+                    netYer += y; netSau += s;
+                } else if(t.type === "سحب" || t.type === "بيع سعودي للعميل" || t.type === "شراء سعودي من العميل (نقداً)") {
+                    netYer -= y; netSau -= s;
+                } else if(t.type === "تحويل صادر") {
+                    netYer -= y; netSau -= s;
+                } else if(t.type === "تحويل وارد") {
+                    netYer += y; netSau += s;
+                }
+            }
+        });
+    }
+    if(data.groceries) {
+        data.groceries.forEach(g => {
+            if(g.name === name) {
+                let gy = Number(g.yer || 0);
+                if(g.payMode === "دين") {
+                    groceryDebt += gy;
+                } else if(g.payMode === "خصم أمانات") {
+                    netYer -= gy;
+                }
+            }
+        });
+    }
+    return { netYer, netSau, groceryDebt };
 }
 
 function checkCustomerAuto(prefix) {
-    let nameInput = document.getElementById(prefix + "Name") || document.getElementById(prefix + "Customer");
+    let nameInput = document.getElementById(prefix + "Name" || prefix + "Customer");
     let accInput = document.getElementById(prefix + "Acc");
     let phoneInput = document.getElementById(prefix + "Phone");
-    if(!nameInput || !accInput) return;
+    if(!nameInput) return;
     let name = nameInput.value.trim();
-    if(name) {
-        let info = getCustomerInfo(name);
-        accInput.value = info.acc;
-        if(phoneInput && info.phone && !phoneInput.value) {
-            phoneInput.value = info.phone;
-        }
+    if(!name) return;
+    let customers = getCustomersList();
+    let found = customers.find(c => c.name === name);
+    if(found) {
+        if(accInput) accInput.value = found.acc;
+        if(phoneInput && !phoneInput.value) phoneInput.value = found.phone;
     } else {
-        accInput.value = "";
+        if(accInput && !accInput.value) {
+            accInput.value = "ACC-" + (Math.floor(Math.random() * 90000) + 10000);
+        }
     }
 }
 
-function processGroceryTransaction() {
-    const name = document.getElementById("grocCustomer").value.trim();
-    const acc = document.getElementById("grocAcc").value.trim();
-    const amountYer = parseFloat(document.getElementById("grocYer").value) || 0;
-    const amountSau = parseFloat(document.getElementById("grocSau").value) || 0;
-    const payMode = document.getElementById("grocPayMode").value;
-    const note = document.getElementById("grocNote").value;
-    const phone = document.getElementById("grocPhone").value.trim();
+function renderDatalist() {
+    let listOpt = document.getElementById("customersListOptions");
+    if(!listOpt) return;
+    let customers = getCustomersList();
+    let html = "";
+    customers.forEach(c => {
+        html += `<option value="${c.name}">`;
+    });
+    listOpt.innerHTML = html;
+}
 
-    if (!name || !acc || (amountYer === 0 && amountSau === 0)) {
-        toast("يرجى إكمال بيانات العميل والمبالغ المطلوبة");
+function saveExchangeRates() {
+    let b = document.getElementById("buyRateInput").value;
+    let s = document.getElementById("sellRateInput").value;
+    if(b) data.settings.buyRate = Number(b);
+    if(s) data.settings.sellRate = Number(s);
+    save();
+    toast("تم حفظ أسعار الصرف بنجاح");
+}
+
+function calculateExchange(changed) {
+    let type = document.getElementById("exType").value;
+    let buyRate = Number(data.settings.buyRate || 410);
+    let sellRate = Number(data.settings.sellRate || 412);
+    let defaultRate = (type === "شراء") ? buyRate : sellRate;
+    
+    let rateInput = document.getElementById("exUsedRate");
+    if(!rateInput.value) rateInput.value = defaultRate;
+    let rate = Number(rateInput.value) || defaultRate;
+    
+    let sauInput = document.getElementById("exAmountSau");
+    let yerInput = document.getElementById("exAmountYer");
+    
+    if(changed === 'sau') {
+        let sau = Number(sauInput.value) || 0;
+        yerInput.value = Math.round(sau * rate);
+    } else if(changed === 'yer') {
+        let yer = Number(yerInput.value) || 0;
+        if(rate > 0) sauInput.value = (yer / rate).toFixed(2);
+    } else if(changed === 'rate') {
+        let sau = Number(sauInput.value) || 0;
+        if(sau > 0) yerInput.value = Math.round(sau * rate);
+    }
+}
+
+function processExchangeTransaction() {
+    let type = document.getElementById("exType").value;
+    let mode = document.getElementById("exMode").value;
+    let name = document.getElementById("exCustomer").value.trim();
+    let acc = document.getElementById("exAcc").value.trim();
+    let sau = Number(document.getElementById("exAmountSau").value) || 0;
+    let yer = Number(document.getElementById("exAmountYer").value) || 0;
+    let rate = Number(document.getElementById("exUsedRate").value) || 0;
+    let phone = document.getElementById("exPhone").value.trim();
+    
+    if(!name || sau <= 0 || yer <= 0) {
+        alert("يرجى إدخال اسم العميل والمبالغ بشكل صحيح");
         return;
     }
-
-    let totalDeposits = 0;
-    let totalWithdrawals = 0;
-    data.transactions.forEach(t => {
-        if (t.acc === acc) {
-            if (t.type === "إيداع") totalDeposits += (t.yer || 0);
-            else if (t.type === "سحب") totalWithdrawals += (t.yer || 0);
-        }
-    });
-    let currentBalance = totalDeposits - totalWithdrawals;
-
-    if (payMode === "خصم أمانات") {
-        data.transactions.push({
-            id: 'tr_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-            name, acc, phone, type: "سحب", yer: amountYer, sau: amountSau, 
-            note: "خصم أمانات (قيمة مشتريات بقالة): " + (note || "بدون بيان"), 
-            date: new Date().toLocaleString("ar-SA")
-        });
-        currentBalance -= amountYer;
-    } else {
-        data.groceries.push({
-            id: 'gr_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-            name, acc, phone, amountYer, amountSau, payMode, note, 
-            date: new Date().toLocaleString("ar-SA")
-        });
-    }
-
+    
+    let transType = (type === "شراء") ? "شراء سعودي من العميل" : "بيع سعودي للعميل";
+    if(mode === "نقداً") transType += " (نقداً)";
+    
+    let trans = {
+        id: Date.now(),
+        type: transType,
+        name: name,
+        acc: acc || ("ACC-" + Math.floor(Math.random() * 90000 + 10000)),
+        sau: (type === "شراء") ? sau : -sau,
+        yer: (type === "شراء") ? -yer : yer,
+        rate: rate,
+        phone: phone,
+        date: new Date().toISOString().slice(0, 10),
+        note: `مصارفة عملات (${type}) بسعر ${rate}`
+    };
+    
+    data.transactions.unshift(trans);
     save();
-
-    const message = `${data.settings.storeName}
-قسم الامانات والايداعات المالية
-📞 أرقام التواصل: ${data.settings.phones}
-🛒 *سند مشتريات مواد غذائية*
---------------------------
-👤 العميل: ${name}
-🔢 رقم الحساب: ${acc}
-💵 المبلغ: ${amountYer} ريال يمني / ${amountSau} سعودي
-📌 طريقة السداد: ${payMode}
-📝 البيان: ${note || "بدون بيان"}
-💰 الرصيد المتبقي (أمانات): ${currentBalance} ريال يمني
-📅 التاريخ: ${new Date().toLocaleString("ar-SA")}
---------------------------
-${data.settings.adText}`;
-
+    
+    let textWp = `📢 *${data.settings.storeName}*\n` +
+                 `━━━━━━━━━━━━━━━━━━━\n` +
+                 `🔄 *إشعار عمليات مصارفة عملات*\n` +
+                 `👤 العميل: *${name}*\n` +
+                 `🔢 رقم الحساب: ${trans.acc}\n` +
+                 `📋 نوع العملية: ${transType}\n` +
+                 `💵 المبلغ بالسعودي: ${sau} SAR\n` +
+                 `💰 المبلغ باليمني: ${yer} YER\n` +
+                 `📈 سعر الصرف: ${rate}\n` +
+                 `📅 التاريخ: ${trans.date}\n` +
+                 `━━━━━━━━━━━━━━━━━━━\n` +
+                 `${data.settings.adText || ''}\n` +
+                 `📞 للتواصل: ${data.settings.phones}`;
+                 
     if(phone) {
-        openWhatsApp(phone, message);
+        window.open(`https://wa.me/967${phone.replace(/^0+/, '')}?text=${encodeURIComponent(textWp)}`, '_blank');
+    }
+    toast("تم تنفيذ عملية المصارفة وحفظها بنجاح");
+}
+
+function processGroceryTransaction() {
+    let name = document.getElementById("grocCustomer").value.trim();
+    let acc = document.getElementById("grocAcc").value.trim();
+    let yer = Number(document.getElementById("grocYer").value) || 0;
+    let sau = Number(document.getElementById("grocSau").value) || 0;
+    let payMode = document.getElementById("grocPayMode").value;
+    let phone = document.getElementById("grocPhone").value.trim();
+    let note = document.getElementById("grocNote").value.trim() || "مشتريات مواد غذائية";
+    
+    if(!name || (yer <= 0 && sau <= 0)) {
+        alert("يرجى إدخال اسم العميل وقيمة المشتريات");
+        return;
     }
     
-    toast("تمت العملية بنجاح وإرسال الإشعار");
-    document.getElementById("grocCustomer").value = "";
-    document.getElementById("grocAcc").value = "";
-    document.getElementById("grocYer").value = "";
-    document.getElementById("grocSau").value = "";
-    document.getElementById("grocNote").value = "";
-    document.getElementById("grocPhone").value = "";
+    let grocObj = {
+        id: Date.now(),
+        name: name,
+        acc: acc || ("ACC-" + Math.floor(Math.random() * 90000 + 10000)),
+        yer: yer,
+        sau: sau,
+        payMode: payMode,
+        phone: phone,
+        note: note,
+        date: new Date().toISOString().slice(0, 10)
+    };
+    
+    data.groceries.unshift(grocObj);
+    save();
+    
+    let textWp = `📢 *${data.settings.storeName}*\n` +
+                 `━━━━━━━━━━━━━━━━━━━\n` +
+                 `🛒 *فاتورة مشتريات مواد غذائية*\n` +
+                 `👤 العميل: *${name}*\n` +
+                 `🔢 رقم الحساب: ${grocObj.acc}\n` +
+                 `📦 البيان: ${note}\n` +
+                 `💵 القيمة باليمني: ${yer} YER\n` +
+                 `💵 القيمة بالسعودي: ${sau} SAR\n` +
+                 `📌 طريقة السداد: ${payMode}\n` +
+                 `📅 التاريخ: ${grocObj.date}\n` +
+                 `━━━━━━━━━━━━━━━━━━━\n` +
+                 `${data.settings.adText || ''}\n` +
+                 `📞 للتواصل: ${data.settings.phones}`;
+                 
+    if(phone) {
+        window.open(`https://wa.me/967${phone.replace(/^0+/, '')}?text=${encodeURIComponent(textWp)}`, '_blank');
+    }
+    toast("تم تسجيل مشتريات البقالة بنجاح");
 }
 
 function addTransaction(type) {
@@ -463,251 +574,314 @@ function addTransaction(type) {
     let sauInput = document.getElementById(type === 'إيداع' ? 'depositSau' : 'withdrawSau');
     let phoneInput = document.getElementById(type === 'إيداع' ? 'depositPhone' : 'withdrawPhone');
     let noteInput = document.getElementById(type === 'إيداع' ? 'depositNote' : 'withdrawNote');
-
+    
     let name = nameInput.value.trim();
     let acc = accInput.value.trim();
-    let yer = parseFloat(yerInput.value) || 0;
-    let sau = parseFloat(sauInput.value) || 0;
+    let yer = Number(yerInput.value) || 0;
+    let sau = Number(sauInput.value) || 0;
     let phone = phoneInput.value.trim();
-    let note = noteInput.value.trim();
-
-    if(!name || (yer === 0 && sau === 0)) {
-        toast("يرجى إدخال اسم العميل والمبلغ");
+    let note = noteInput.value.trim() || (type === 'إيداع' ? 'إيداع نقدي' : 'سحب نقدي');
+    
+    if(!name || (yer <= 0 && sau <= 0)) {
+        alert("يرجى إدخال اسم العميل والمبالغ بشكل صحيح");
         return;
     }
-
-    if(!acc) {
-        let info = getCustomerInfo(name);
-        acc = info.acc;
-    }
-
-    data.transactions.push({
-        id: 'tr_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-        name, acc, phone, type, yer, sau, note,
-        date: new Date().toLocaleString("ar-SA")
-    });
-
-    if(type === 'إيداع') data.balanceYer += yer;
-    else data.balanceYer -= yer;
-
+    
+    let trans = {
+        id: Date.now(),
+        type: type,
+        name: name,
+        acc: acc || ("ACC-" + Math.floor(Math.random() * 90000 + 10000)),
+        yer: yer,
+        sau: sau,
+        phone: phone,
+        note: note,
+        date: new Date().toISOString().slice(0, 10)
+    };
+    
+    data.transactions.unshift(trans);
     save();
     
-    let message = `${data.settings.storeName}
-قسم الامانات والايداعات المالية
-📞 أرقام التواصل: ${data.settings.phones}
-📄 سند ${type} مالي
---------------------------
-👤 العميل: ${name}
-🔢 رقم الحساب: ${acc}
-💵 المبلغ: ${yer} ريال يمني / ${sau} سعودي
-📝 البيان: ${note || "بدون بيان"}
-📅 التاريخ: ${new Date().toLocaleString("ar-SA")}
---------------------------
-${data.settings.adText}`;
-
-    if(phone) openWhatsApp(phone, message);
-
-    toast(`تم تسجيل ${type} بنجاح`);
-    nameInput.value = ""; accInput.value = ""; yerInput.value = ""; sauInput.value = ""; phoneInput.value = ""; noteInput.value = "";
-}
-
-function deleteTransactionItem(id, isGrocery) {
-    if(!confirm("هل أنت متأكد من حذف هذه العملية؟")) return;
-    
-    if(isGrocery) {
-        data.groceries = data.groceries.filter(g => g.id !== id);
-    } else {
-        data.transactions = data.transactions.filter(t => t.id !== id);
+    let textWp = `📢 *${data.settings.storeName}*\n` +
+                 `━━━━━━━━━━━━━━━━━━━\n` +
+                 `🧾 *إشعار سند ${type} مالي*\n` +
+                 `👤 العميل: *${name}*\n` +
+                 `🔢 رقم الحساب: ${trans.acc}\n` +
+                 `💰 المبلغ باليمني: ${yer} YER\n` +
+                 `💵 المبلغ بالسعودي: ${sau} SAR\n` +
+                 `📝 البيان: ${note}\n` +
+                 `📅 التاريخ: ${trans.date}\n` +
+                 `━━━━━━━━━━━━━━━━━━━\n` +
+                 `${data.settings.adText || ''}\n` +
+                 `📞 للتواصل: ${data.settings.phones}`;
+                 
+    if(phone) {
+        window.open(`https://wa.me/967${phone.replace(/^0+/, '')}?text=${encodeURIComponent(textWp)}`, '_blank');
     }
-    
-    localStorage.setItem("binrajih_app", JSON.stringify(data));
-    render();
-    if(typeof activeCustomerName !== 'undefined' && activeCustomerName) {
-        openCustomerDetails(activeCustomerName, activeCustomerAcc);
-    }
-    toast("تم الحذف بنجاح");
-}
-
-function editTransactionItem(id, isGrocery) {
-    let item;
-    if(isGrocery) {
-        item = data.groceries.find(g => g.id === id);
-    } else {
-        item = data.transactions.find(t => t.id === id);
-    }
-    if(!item) return;
-
-    let newYer = prompt("أدخل المبلغ الجديد باليمني:", isGrocery ? item.amountYer : item.yer);
-    if(newYer === null) return;
-    let newNote = prompt("أدخل البيان / الملاحظة الجديدة:", item.note);
-    if(newNote === null) return;
-
-    if(isGrocery) {
-        item.amountYer = parseFloat(newYer) || 0;
-        item.note = newNote;
-    } else {
-        item.yer = parseFloat(newYer) || 0;
-        item.note = newNote;
-    }
-    
-    localStorage.setItem("binrajih_app", JSON.stringify(data));
-    render();
-    if(typeof activeCustomerName !== 'undefined' && activeCustomerName) {
-        openCustomerDetails(activeCustomerName, activeCustomerAcc);
-    }
-    toast("تم التعديل بنجاح");
+    toast(`تم تسجيل وتوثيق عملية الـ ${type} بنجاح`);
 }
 
 function executeFinancialTransfer() {
-    let fromName = document.getElementById("transferFrom").value.trim();
-    let toName = document.getElementById("transferTo").value.trim();
-    let yer = parseFloat(document.getElementById("transferYer").value) || 0;
-    let sau = parseFloat(document.getElementById("transferSau").value) || 0;
-    let note = document.getElementById("transferNote").value.trim();
-
-    if(!fromName || !toName || (yer === 0 && sau === 0)) {
-        toast("يرجى إكمال بيانات التحويل");
+    let from = document.getElementById("transferFrom").value.trim();
+    let to = document.getElementById("transferTo").value.trim();
+    let yer = Number(document.getElementById("transferYer").value) || 0;
+    let sau = Number(document.getElementById("transferSau").value) || 0;
+    let note = document.getElementById("transferNote").value.trim() || "تحويل بين الحسابات";
+    
+    if(!from || !to || (yer <= 0 && sau <= 0)) {
+        alert("يرجى تحديد المرسل والمستفيد والمبلغ بشكل صحيح");
         return;
     }
-
-    let fromAcc = getCustomerInfo(fromName).acc;
-    let toAcc = getCustomerInfo(toName).acc;
-
-    data.transactions.push({
-        id: 'tr_' + Date.now() + '_1_' + Math.random().toString(36).substr(2, 5),
-        name: fromName, acc: fromAcc, type: "سحب", yer, sau,
-        note: `تحويل إلى ${toName} (${note})`,
-        date: new Date().toLocaleString("ar-SA")
-    });
-
-    data.transactions.push({
-        id: 'tr_' + Date.now() + '_2_' + Math.random().toString(36).substr(2, 5),
-        name: toName, acc: toAcc, type: "إيداع", yer, sau,
-        note: `تحويل من ${fromName} (${note})`,
-        date: new Date().toLocaleString("ar-SA")
-    });
-
-    save();
-    toast("تم تنفيذ التحويل بنجاح");
-}
-
-function saveExchangeRates() {
-    data.settings.buyRate = parseFloat(document.getElementById("buyRateInput").value) || data.settings.buyRate;
-    data.settings.sellRate = parseFloat(document.getElementById("sellRateInput").value) || data.settings.sellRate;
-    save();
-    toast("تم حفظ أسعار الصرف");
-    render();
-}
-
-function calculateExchange(changed) {
-    let type = document.getElementById("exType").value;
-    let buyRate = parseFloat(document.getElementById("buyRateInput").value) || data.settings.buyRate;
-    let sellRate = parseFloat(document.getElementById("sellRateInput").value) || data.settings.sellRate;
-    let rateInput = document.getElementById("exUsedRate");
     
-    if(!rateInput.value) rateInput.value = (type === 'شراء') ? buyRate : sellRate;
+    let dateStr = new Date().toISOString().slice(0, 10);
     
-    let rate = parseFloat(rateInput.value) || 1;
-    let sauInput = document.getElementById("exAmountSau");
-    let yerInput = document.getElementById("exAmountYer");
-
-    if(changed === 'sau') {
-        let sau = parseFloat(sauInput.value) || 0;
-        yerInput.value = (sau * rate).toFixed(2);
-    } else if(changed === 'yer') {
-        let yer = parseFloat(yerInput.value) || 0;
-        yerInput.value = rate > 0 ? (yer / rate).toFixed(2) : 0;
-    } else if(changed === 'rate') {
-        let sau = parseFloat(sauInput.value) || 0;
-        if(sau > 0) yerInput.value = (sau * rate).toFixed(2);
-    }
+    data.transactions.unshift({
+        id: Date.now(),
+        type: "تحويل صادر",
+        name: from,
+        acc: "ACC-TR",
+        yer: yer,
+        sau: sau,
+        note: `تحويل إلى ${to}: ${note}`,
+        date: dateStr
+    });
+    
+    data.transactions.unshift({
+        id: Date.now() + 1,
+        type: "تحويل وارد",
+        name: to,
+        acc: "ACC-TR",
+        yer: yer,
+        sau: sau,
+        note: `تحويل من ${from}: ${note}`,
+        date: dateStr
+    });
+    
+    save();
+    toast("تم تنفيذ عملية التحويل بنجاح بين الحسابين");
 }
 
-function processExchangeTransaction() {
-    let customer = document.getElementById("exCustomer").value.trim();
-    let acc = document.getElementById("exAcc").value.trim();
-    let type = document.getElementById("exType").value;
-    let mode = document.getElementById("exMode").value;
-    let sau = parseFloat(document.getElementById("exAmountSau").value) || 0;
-    let yer = parseFloat(document.getElementById("exAmountYer").value) || 0;
-    let rate = parseFloat(document.getElementById("exUsedRate").value) || 0;
-    let phone = document.getElementById("exPhone").value.trim();
+let currentSelectedCustomer = "";
 
-    if(!customer || sau === 0 || yer === 0) {
-        toast("يرجى إكمال بيانات المصارفة");
-        return;
-    }
-
-    if(!acc) acc = getCustomerInfo(customer).acc;
-
-    if(mode === 'حساب') {
-        let transType = (type === 'شراء') ? 'إيداع' : 'سحب';
-        data.transactions.push({
-            id: 'tr_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-            name: customer, acc, phone, type: transType, yer, sau,
-            note: `مصارفة عملات (${type} سعودي بسعر ${rate})`,
-            date: new Date().toLocaleString("ar-SA")
+function viewCustomerDetails(name) {
+    currentSelectedCustomer = name;
+    let details = getCustomerBalance(name);
+    let customers = getCustomersList();
+    let custInfo = customers.find(c => c.name === name) || { acc: "غير محدد" };
+    
+    document.getElementById("detCustomerName").innerText = "حساب العميل: " + name;
+    document.getElementById("detCustomerAcc").innerText = "رقم الحساب: " + custInfo.acc;
+    document.getElementById("detNetYer").innerText = details.netYer + " ريال";
+    document.getElementById("detNetSau").innerText = details.netSau + " SAR";
+    document.getElementById("detGroceryDebt").innerText = details.groceryDebt + " ريال";
+    
+    let html = "<h3 style='margin-bottom:10px;'>العمليات والديون الخاصة بالعميل</h3>";
+    let foundAny = false;
+    
+    if(data.transactions) {
+        data.transactions.forEach(t => {
+            if(t.name === name) {
+                foundAny = true;
+                html += `<div class="mobile-card-item">
+                    <div class="mobile-card-row"><b>${t.type}</b> <span class="badge">${t.date}</span></div>
+                    <div style="font-size:13px; color:#475467;">يمني: ${t.yer || 0} | سعودي: ${t.sau || 0}</div>
+                    <div style="font-size:12px; color:#667085; margin-top:4px;">البيان: ${t.note || '-'}</div>
+                </div>`;
+            }
         });
-        save();
     }
+    
+    if(data.groceries) {
+        data.groceries.forEach(g => {
+            if(g.name === name) {
+                foundAny = true;
+                html += `<div class="mobile-card-item" style="border-right:4px solid #dc2626;">
+                    <div class="mobile-card-row"><b>مشتريات بقالة (${g.payMode})</b> <span class="badge">${g.date}</span></div>
+                    <div style="font-size:13px; color:#475467;">يمني: ${g.yer || 0} | سعودي: ${g.sau || 0}</div>
+                    <div style="font-size:12px; color:#667085; margin-top:4px;">الصنف: ${g.note || '-'}</div>
+                </div>`;
+            }
+        });
+    }
+    
+    if(!foundAny) {
+        html += `<div class="empty">لا توجد عمليات مسجلة لهذا العميل حتى الآن</div>`;
+    }
+    
+    document.getElementById("detTransactions").innerHTML = html;
+    showSection('customerDetails');
+}
 
-    let message = `${data.settings.storeName}
-قسم الامانات والايداعات المالية
-📞 أرقام التواصل: ${data.settings.phones}
-🔱 سند مصارفة عملات
---------------------------
-👤 العميل: ${customer}
-🔄 نوع العملية: ${type} سعودي
-💵 المبلغ بالسعودي: ${sau} SAR
-💰 المبلغ باليمني: ${yer} YER
-📈 سعر الصرف: ${rate}
-📅 التاريخ: ${new Date().toLocaleString("ar-SA")}
---------------------------
-${data.settings.adText}`;
+function quickActionFromDetails(actionType) {
+    if(!currentSelectedCustomer) return;
+    if(actionType === 'إيداع') {
+        showSection('deposit');
+        document.getElementById("depositName").value = currentSelectedCustomer;
+        checkCustomerAuto('deposit');
+    } else if(actionType === 'سحب') {
+        showSection('withdraw');
+        document.getElementById("withdrawName").value = currentSelectedCustomer;
+        checkCustomerAuto('withdraw');
+    }
+}
 
-    if(phone) openWhatsApp(phone, message);
-    toast("تم تنفيذ عملية المصارفة بنجاح");
+function renderCustomersList() {
+    let container = document.getElementById("customersListContainer");
+    if(!container) return;
+    let query = document.getElementById("customerSearch") ? document.getElementById("customerSearch").value.toLowerCase() : "";
+    let customers = getCustomersList();
+    
+    if(customers.length === 0) {
+        container.innerHTML = `<div class="empty">لا يوجد عملاء مسجلون حالياً</div>`;
+        return;
+    }
+    
+    let html = "";
+    customers.forEach(c => {
+        if(query && !c.name.toLowerCase().includes(query) && !c.acc.toLowerCase().includes(query)) return;
+        let bal = getCustomerBalance(c.name);
+        html += `<div class="mobile-card-item" style="cursor:pointer;" onclick="viewCustomerDetails('${c.name}')">
+            <div class="mobile-card-row">
+                <b>${c.name}</b>
+                <span class="badge">${c.acc}</span>
+            </div>
+            <div style="font-size:13px; color:#475467; margin-top:5px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+                <span>أمانات يمني: <b style="color:#2563eb;">${bal.netYer} ريال</b></span>
+                <span>أمانات سعودي: <b style="color:#16a34a;">${bal.netSau} SAR</b></span>
+                <span>ديون البقالة: <b style="color:#dc2626;">${bal.groceryDebt} ريال</b></span>
+            </div>
+        </div>`;
+    });
+    
+    container.innerHTML = html || `<div class="empty">لا توجد نتائج مطابقة للبحث</div>`;
+}
+
+function render() {
+    renderDatalist();
+    renderCustomersList();
+    
+    // حساب الإجماليات
+    let totalDepYer = 0, totalWithYer = 0, totalDepSau = 0, totalGroceryDebt = 0;
+    
+    if(data.transactions) {
+        data.transactions.forEach(t => {
+            let y = Number(t.yer || 0);
+            let s = Number(t.sau || 0);
+            if(t.type === "إيداع") {
+                totalDepYer += y; totalDepSau += s;
+            } else if(t.type === "سحب") {
+                totalWithYer += y;
+            }
+        });
+    }
+    
+    if(data.groceries) {
+        data.groceries.forEach(g => {
+            if(g.payMode === "دين") {
+                totalGroceryDebt += Number(g.yer || 0);
+            }
+        });
+    }
+    
+    let boxYer = totalDepYer - totalWithYer;
+    document.getElementById("balanceYer").innerText = boxYer + " ريال";
+    document.getElementById("totalDepYer").innerText = totalDepYer + " ريال";
+    document.getElementById("totalWithYer").innerText = totalWithYer + " ريال";
+    
+    if(document.getElementById("homeTotDepYer")) document.getElementById("homeTotDepYer").innerText = totalDepYer + " ريال";
+    if(document.getElementById("homeTotDepSau")) document.getElementById("homeTotDepSau").innerText = totalDepSau + " SAR";
+    if(document.getElementById("homeTotGroceryDebt")) document.getElementById("homeTotGroceryDebt").innerText = totalGroceryDebt + " ريال";
+    
+    // أسعار الصرف في الواجهة
+    if(document.getElementById("buyRateInput")) document.getElementById("buyRateInput").value = data.settings.buyRate || 410;
+    if(document.getElementById("sellRateInput")) document.getElementById("sellRateInput").value = data.settings.sellRate || 412;
+    if(document.getElementById("dispBuyRate")) document.getElementById("dispBuyRate").innerText = data.settings.buyRate || 410;
+    if(document.getElementById("dispSellRate")) document.getElementById("dispSellRate").innerText = data.settings.sellRate || 412;
+    
+    // إعدادات النصوص
+    if(document.getElementById("settingsStoreName")) document.getElementById("settingsStoreName").value = data.settings.storeName || "";
+    if(document.getElementById("settingsPhones")) document.getElementById("settingsPhones").value = data.settings.phones || "";
+    if(document.getElementById("settingsEmail")) document.getElementById("settingsEmail").value = data.settings.email || "";
+    if(document.getElementById("settingsAdText")) document.getElementById("settingsAdText").value = data.settings.adText || "";
+    
+    if(document.getElementById("headerTitle")) document.getElementById("headerTitle").innerText = data.settings.storeName;
+    if(document.getElementById("pageTitle")) document.getElementById("pageTitle").innerText = data.settings.storeName;
+    
+    // شريط الإعلانات المتحرك
+    let marqueeEl = document.getElementById("marqueeTextContent");
+    if(marqueeEl) {
+        marqueeEl.innerText = `🌟 أهلاً بكم في ${data.settings.storeName} | 💰 قسم الأمانات والإيداعات المالية | 📞 أرقام التواصل: ${data.settings.phones} | ${data.settings.adText || ''}`;
+    }
+    
+    // الخلفية
+    if(data.settings.bgUrl) {
+        document.getElementById("appHeader").style.setProperty('--app-bg-image', `url(${data.settings.bgUrl})`);
+        document.getElementById("bgPreviewBox").style.backgroundImage = `url(${data.settings.bgUrl})`;
+        document.getElementById("bgPreviewBox").innerText = "";
+    } else {
+        document.getElementById("appHeader").style.removeProperty('--app-bg-image');
+        document.getElementById("bgPreviewBox").style.backgroundImage = "none";
+        document.getElementById("bgPreviewBox").innerText = "اضغط هنا لاختيار صورة الترويسة";
+    }
+    
+    // آخر العمليات (تعرض بالكامل وبدون أي اقتصار أو نقصان)
+    let recHtml = "";
+    if(data.transactions && data.transactions.length > 0) {
+        data.transactions.forEach(t => {
+            recHtml += `<div class="mobile-card-item">
+                <div class="mobile-card-row"><b>${t.type} - ${t.name}</b> <span class="badge">${t.date}</span></div>
+                <div style="font-size:13px; color:#475467;">يمني: ${t.yer || 0} | سعودي: ${t.sau || 0}</div>
+                <div style="font-size:12px; color:#667085; margin-top:3px;">البيان: ${t.note || '-'}</div>
+            </div>`;
+        });
+    } else {
+        recHtml = `<div class="empty">لا توجد عمليات مسجلة حديثاً</div>`;
+    }
+    document.getElementById("recentTransactions").innerHTML = recHtml;
 }
 
 function saveAppSettings() {
-    data.settings.storeName = document.getElementById("settingsStoreName").value || data.settings.storeName;
-    data.settings.phones = document.getElementById("settingsPhones").value || data.settings.phones;
-    data.settings.email = document.getElementById("settingsEmail").value || data.settings.email;
-    data.settings.adText = document.getElementById("settingsAdText").value || data.settings.adText;
+    let sName = document.getElementById("settingsStoreName").value.trim();
+    let phones = document.getElementById("settingsPhones").value.trim();
+    let email = document.getElementById("settingsEmail").value.trim();
+    let adText = document.getElementById("settingsAdText").value.trim();
+    
+    if(sName) data.settings.storeName = sName;
+    if(phones) data.settings.phones = phones;
+    data.settings.email = email;
+    if(adText) data.settings.adText = adText;
+    
     save();
-    toast("تم حفظ الإعدادات");
-    render();
+    toast("تم حفظ الإعدادات بنجاح");
 }
 
 function handleBgImageUpload(event) {
     let file = event.target.files[0];
-    if(file) {
-        let reader = new FileReader();
-        reader.onload = function(e) {
-            data.settings.bgUrl = e.target.result;
-            save();
-            render();
-            toast("تم تحديث الخلفية بنجاح");
-        };
-        reader.readAsDataURL(file);
-    }
+    if(!file) return;
+    let reader = new FileReader();
+    reader.onload = function(e) {
+        data.settings.bgUrl = e.target.result;
+        save();
+        toast("تم تحديث صورة الخلفية بنجاح");
+    };
+    reader.readAsDataURL(file);
 }
 
 function removeBgImage() {
     data.settings.bgUrl = "";
     save();
-    render();
-    toast("تمت إزالة خلفية الترويسة");
+    toast("تم إزالة الخلفية");
 }
 
 function exportData() {
     let dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data));
     let dlAnchor = document.createElement('a');
     dlAnchor.setAttribute("href", dataStr);
-    dlAnchor.setAttribute("download", "binrajih_backup.json");
+    dlAnchor.setAttribute("download", "binrajih_backup_" + new Date().toISOString().slice(0,10) + ".json");
     document.body.appendChild(dlAnchor);
     dlAnchor.click();
     dlAnchor.remove();
+    toast("تم تصدير النسخة الاحتياطية بنجاح");
 }
 
 function importData(event) {
@@ -716,217 +890,26 @@ function importData(event) {
     let reader = new FileReader();
     reader.onload = function(e) {
         try {
-            data = JSON.parse(e.target.result);
-            save();
-            render();
-            toast("تمت استعادة النسخة الاحتياطية بنجاح");
+            let parsed = JSON.parse(e.target.result);
+            if(parsed) {
+                data = parsed;
+                save();
+                alert("تم استعادة البيانات بنجاح!");
+            }
         } catch(err) {
-            toast("ملف النسخة الاحتياطية غير صالح");
+            alert("ملف غير صالح أو التنسيق غير صحيح");
         }
     };
     reader.readAsText(file);
 }
 
 function clearData() {
-    if(confirm("هل أنت متأكد من حذف كافة البيانات؟ لا يمكن التراجع عن هذا الإجراء.")) {
+    if(confirm("هل أنت متأكد من رغبتك في حذف كافة بيانات النظام؟")) {
         localStorage.removeItem("binrajih_app");
         data = JSON.parse(JSON.stringify(defaultData));
         save();
-        render();
-        toast("تم مسح كافة البيانات");
+        toast("تم مسح كافة البيانات وإعادة الضبط");
     }
-}
-
-function renderCustomersList() {
-    let container = document.getElementById("customersListContainer");
-    let query = (document.getElementById("customerSearch").value || "").trim().toLowerCase();
-    
-    let customersMap = {};
-    
-    data.transactions.forEach(t => {
-        if(!t.name) return;
-        let acc = t.acc || "غير محدد";
-        if(!customersMap[acc]) {
-            customersMap[acc] = { name: t.name, acc, phone: t.phone || "", depYer: 0, depSau: 0, withYer: 0, withSau: 0 };
-        }
-        if(t.phone && !customersMap[acc].phone) customersMap[acc].phone = t.phone;
-        if(t.type === 'إيداع') {
-            customersMap[acc].depYer += (t.yer || 0);
-            customersMap[acc].depSau += (t.sau || 0);
-        } else if(t.type === 'سحب') {
-            customersMap[acc].withYer += (t.yer || 0);
-            customersMap[acc].withSau += (t.sau || 0);
-        }
-    });
-
-    data.groceries.forEach(g => {
-        if(!g.name) return;
-        let acc = g.acc || "غير محدد";
-        if(!customersMap[acc]) {
-            customersMap[acc] = { name: g.name, acc, phone: g.phone || "", depYer: 0, depSau: 0, withYer: 0, withSau: 0 };
-        }
-        if(g.phone && !customersMap[acc].phone) customersMap[acc].phone = g.phone;
-    });
-
-    let html = "";
-    let datalistOptions = "";
-    
-    let keys = Object.keys(customersMap);
-    keys.sort((a,b) => customersMap[b].depYer - customersMap[a].depYer);
-
-    keys.forEach(acc => {
-        let c = customersMap[acc];
-        datalistOptions += `<option value="${c.name}">حساب: ${c.acc}</option>`;
-        
-        if(query && !c.name.toLowerCase().includes(query) && !c.acc.toLowerCase().includes(query)) return;
-
-        let netYer = c.depYer - c.withYer;
-
-        html += `
-        <div class="mobile-card-item">
-            <div class="mobile-card-row">
-                <b>${c.name}</b>
-                <span class="badge">حساب: ${c.acc}</span>
-            </div>
-            <div style="font-size:12px; color:#475467; margin-bottom:8px;">
-                رقم الهاتف: <b>${c.phone || 'غير مسجل'}</b> | صافي الأمانات: <b style="color:${netYer >= 0 ? '#16a34a':'#dc2626'}">${netYer} YER</b>
-            </div>
-            <div class="trans-actions-group">
-                <button class="primary" style="padding:6px 12px; font-size:11px; margin-top:0;" onclick="openCustomerDetails('${c.name}', '${c.acc}')">كشف حساب</button>
-            </div>
-        </div>`;
-    });
-
-    document.getElementById("customersListOptions").innerHTML = datalistOptions;
-    container.innerHTML = html || '<div class="empty">لا توجد سجلات مطابقة</div>';
-}
-
-function openCustomerDetails(name, acc) {
-    activeCustomerName = name;
-    activeCustomerAcc = acc;
-    document.getElementById("detCustomerName").textContent = name;
-    document.getElementById("detCustomerAcc").textContent = "رقم الحساب: " + acc;
-    
-    let depYer = 0, depSau = 0, withYer = 0, withSau = 0, groceryDebt = 0;
-    let transHtml = "<h3>سجل العمليات للعميل</h3>";
-    
-    data.transactions.forEach(t => {
-        if(t.acc === acc || (t.name && t.name.trim().toLowerCase() === name.trim().toLowerCase())) {
-            if(!t.id) t.id = 'tr_' + Math.random();
-            if(t.type === 'إيداع') { depYer += (t.yer || 0); depSau += (t.sau || 0); }
-            if(t.type === 'سحب') { withYer += (t.yer || 0); withSau += (t.sau || 0); }
-            
-            transHtml += `
-            <div class="mobile-card-item" style="background:#fff;">
-                <div class="mobile-card-row">
-                    <b>${t.type}</b>
-                    <span style="font-size:11px; color:#667085;">${t.date}</span>
-                </div>
-                <div style="font-size:13px; margin:4px 0;">المبلغ: <b>${t.yer || 0} YER</b> / <b>${t.sau || 0} SAR</b></div>
-                <div style="font-size:12px; color:#475467;">البيان: ${t.note || '-'}</div>
-                <div class="trans-actions-group" style="margin-top:6px;">
-                    <button class="warning" style="padding:4px 8px; font-size:10px; margin-top:0;" onclick="editTransactionItem('${t.id}', false)">✏️ تعديل</button>
-                    <button class="danger" style="padding:4px 8px; font-size:10px; margin-top:0;" onclick="deleteTransactionItem('${t.id}', false)">🗑️ حذف</button>
-                </div>
-            </div>`;
-        }
-    });
-
-    data.groceries.forEach(g => {
-        if(g.acc === acc || (g.name && g.name.trim().toLowerCase() === name.trim().toLowerCase())) {
-            if(!g.id) g.id = 'gr_' + Math.random();
-            if(g.payMode === 'دين') {
-                groceryDebt += (g.amountYer || 0);
-            }
-            transHtml += `
-            <div class="mobile-card-item" style="background:#fff7ed;">
-                <div class="mobile-card-row">
-                    <b>مشتريات بقالة (${g.payMode})</b>
-                    <span style="font-size:11px; color:#667085;">${g.date}</span>
-                </div>
-                <div style="font-size:13px; margin:4px 0;">القيمة: <b>${g.amountYer || 0} YER</b></div>
-                <div style="font-size:12px; color:#475467;">الأصناف: ${g.note || '-'}</div>
-                <div class="trans-actions-group" style="margin-top:6px;">
-                    <button class="warning" style="padding:4px 8px; font-size:10px; margin-top:0;" onclick="editTransactionItem('${g.id}', true)">✏️ تعديل</button>
-                    <button class="danger" style="padding:4px 8px; font-size:10px; margin-top:0;" onclick="deleteTransactionItem('${g.id}', true)">🗑️ حذف</button>
-                </div>
-            </div>`;
-        }
-    });
-
-    document.getElementById("detNetYer").textContent = (depYer - withYer) + " ريال";
-    document.getElementById("detNetSau").textContent = (depSau - withSau) + " SAR";
-    document.getElementById("detGroceryDebt").textContent = groceryDebt + " ريال";
-    document.getElementById("detTransactions").innerHTML = transHtml;
-
-    showSection('customerDetails');
-}
-
-function quickActionFromDetails(type) {
-    showSection(type === 'إيداع' ? 'deposit' : 'withdraw');
-    let nameField = document.getElementById(type === 'إيداع' ? 'depositName' : 'withdrawName');
-    nameField.value = activeCustomerName;
-    checkCustomerAuto(type === 'إيداع' ? 'deposit' : 'withdraw');
-}
-
-let activeCustomerName = "";
-let activeCustomerAcc = "";
-
-function render() {
-    document.getElementById("headerTitle").textContent = data.settings.storeName;
-    document.getElementById("pageTitle").textContent = data.settings.storeName;
-    document.getElementById("marqueeTextContent").innerHTML = `🌟 أهلاً بكم في ${data.settings.storeName} | 💰 قسم الأمانات والإيداعات المالية | 📞 أرقام التواصل: ${data.settings.phones}`;
-    
-    if(data.settings.bgUrl) {
-        document.getElementById("appHeader").style.setProperty('--app-bg-image', `url(${data.settings.bgUrl})`);
-        document.getElementById("bgPreviewBox").style.backgroundImage = `url(${data.settings.bgUrl})`;
-        document.getElementById("bgPreviewBox").textContent = "";
-    } else {
-        document.getElementById("appHeader").style.removeProperty('--app-bg-image');
-        document.getElementById("bgPreviewBox").style.backgroundImage = "none";
-        document.getElementById("bgPreviewBox").textContent = "اضغط هنا لاختيار صورة الترويسة";
-    }
-
-    document.getElementById("settingsStoreName").value = data.settings.storeName;
-    document.getElementById("settingsPhones").value = data.settings.phones;
-    document.getElementById("settingsEmail").value = data.settings.email || "";
-    document.getElementById("settingsAdText").value = data.settings.adText;
-    document.getElementById("buyRateInput").value = data.settings.buyRate;
-    document.getElementById("sellRateInput").value = data.settings.sellRate;
-    document.getElementById("dispBuyRate").textContent = data.settings.buyRate;
-    document.getElementById("dispSellRate").textContent = data.settings.sellRate;
-
-    let totalDepYer = 0, totalDepSau = 0, totalWithYer = 0, totalGroceryDebt = 0;
-
-    data.transactions.forEach(t => {
-        if(t.type === 'إيداع') totalDepYer += (t.yer || 0), totalDepSau += (t.sau || 0);
-        if(t.type === 'سحب') totalWithYer += (t.yer || 0);
-    });
-
-    data.groceries.forEach(g => {
-        if(g.payMode === 'دين') totalGroceryDebt += (g.amountYer || 0);
-    });
-
-    document.getElementById("balanceYer").textContent = (data.balanceYer || 0) + " ريال";
-    document.getElementById("totalDepYer").textContent = totalDepYer + " ريال";
-    document.getElementById("totalWithYer").textContent = totalWithYer + " ريال";
-    
-    document.getElementById("homeTotDepYer").textContent = (totalDepYer - totalWithYer) + " ريال";
-    document.getElementById("homeTotDepSau").textContent = totalDepSau + " SAR";
-    document.getElementById("homeTotGroceryDebt").textContent = totalGroceryDebt + " ريال";
-
-    let recentHtml = "";
-    let combined = [...data.transactions].reverse().slice(0, 5);
-    combined.forEach(t => {
-        recentHtml += `
-        <div style="padding:10px 0; border-bottom:1px solid #eee; font-size:13px;">
-            <b>${t.name}</b> - <span style="color:${t.type==='إيداع'?'#16a34a':'#dc2626'}">${t.type} (${t.yer || 0} ريال)</span>
-            <div style="font-size:11px; color:#667085;">${t.note || ''} | ${t.date}</div>
-        </div>`;
-    });
-    document.getElementById("recentTransactions").innerHTML = recentHtml || '<div class="empty">لا توجد عمليات مسجلة حديثاً</div>';
-
-    renderCustomersList();
 }
 
 render();
